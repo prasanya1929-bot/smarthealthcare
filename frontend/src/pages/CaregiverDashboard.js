@@ -9,7 +9,8 @@ import {
   createAppointment,
   getDoctorAppointments,
   getAllDoctors,
-  getHealthPrediction
+  getHealthPrediction,
+  acknowledgeEmergency
 } from '../utils/api';
 import { Line } from 'react-chartjs-2';
 import {
@@ -130,6 +131,9 @@ const CaregiverDashboard = () => {
         const newEmergencies = filtered.slice(0, filtered.length - previousEmergencyCount);
         newEmergencies.forEach(emergency => {
           const patientName = emergency.patientId?.name || 'Unknown Patient';
+          const emergencyType = emergency.emergencyType === 'PATIENT_MANUAL' 
+            ? 'Patient-triggered Emergency' 
+            : 'AI-detected Emergency';
           
           // Try to use service worker for background notifications first
           if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -137,6 +141,7 @@ const CaregiverDashboard = () => {
               type: 'EMERGENCY_ALERT',
               patientName: patientName,
               emergencyId: emergency._id,
+              emergencyType: emergencyType,
               timestamp: emergency.timestamp
             });
           }
@@ -144,7 +149,7 @@ const CaregiverDashboard = () => {
           // Fallback to regular notification if service worker is not available
           try {
             const notification = new Notification('🚨 Emergency Alert', {
-              body: `${patientName} has triggered an emergency! Please check the dashboard immediately.`,
+              body: `${emergencyType}: ${patientName} needs immediate attention! Please check the dashboard.`,
               icon: '/favicon.ico',
               badge: '/favicon.ico',
               tag: `emergency-${emergency._id}`,
@@ -167,6 +172,17 @@ const CaregiverDashboard = () => {
           }
         });
       }
+      
+      // Auto-acknowledge emergencies when caregiver views them (stops notification spam)
+      filtered.forEach(async (emergency) => {
+        if (!emergency.acknowledged && user && user._id) {
+          try {
+            await acknowledgeEmergency(emergency._id, user._id);
+          } catch (error) {
+            console.error('Error acknowledging emergency:', error);
+          }
+        }
+      });
       
       setPreviousEmergencyCount(filtered.length);
       setEmergencies(filtered);
@@ -422,39 +438,64 @@ const CaregiverDashboard = () => {
               {emergencies.length === 0 ? (
                 <p className="text-lg text-gray-500">No active emergencies</p>
               ) : (
-                emergencies.map((emergency) => (
-                  <div key={emergency._id} className="p-4 border-2 border-red-300 bg-red-50 rounded-lg animate-pulse">
-                    <div className="flex items-start gap-3">
-                      <span className="text-3xl">🚨</span>
-                      <div className="flex-1">
-                        <p className="text-xl font-semibold text-red-800 mb-1">
-                          Emergency Alert
-                        </p>
-                        <p className="text-lg font-medium text-gray-800 mb-2">
-                          Patient: {emergency.patientId?.name || 'Unknown Patient'}
-                        </p>
-                        <p className="text-sm text-gray-600 mb-1">
-                          <span className="font-semibold">Time:</span> {new Date(emergency.timestamp).toLocaleString()}
-                        </p>
-                        {emergency.location && (
+                emergencies.map((emergency) => {
+                  const isPatientManual = emergency.emergencyType === 'PATIENT_MANUAL';
+                  const isAcknowledged = emergency.acknowledged;
+                  
+                  return (
+                    <div 
+                      key={emergency._id} 
+                      className={`p-4 border-2 rounded-lg ${
+                        isAcknowledged 
+                          ? 'border-gray-300 bg-gray-50' 
+                          : isPatientManual
+                          ? 'border-red-500 bg-red-50 animate-pulse'
+                          : 'border-red-300 bg-red-50 animate-pulse'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="text-3xl">🚨</span>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="text-xl font-semibold text-red-800">
+                              {isPatientManual ? 'Patient-Triggered Emergency' : 'AI-Detected Emergency'}
+                            </p>
+                            {isAcknowledged && (
+                              <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">
+                                Viewed
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-lg font-medium text-gray-800 mb-2">
+                            Patient: {emergency.patientId?.name || 'Unknown Patient'}
+                          </p>
                           <p className="text-sm text-gray-600 mb-1">
-                            <span className="font-semibold">Location:</span> {emergency.location}
+                            <span className="font-semibold">Time:</span> {new Date(emergency.timestamp).toLocaleString()}
                           </p>
-                        )}
-                        {(emergency.latitude && emergency.longitude) && (
-                          <p className="text-sm text-gray-600 mb-1">
-                            <span className="font-semibold">Coordinates:</span> {emergency.latitude.toFixed(6)}, {emergency.longitude.toFixed(6)}
-                          </p>
-                        )}
-                        <div className="mt-3 p-2 bg-white rounded border border-red-200">
-                          <p className="text-sm text-gray-700">
-                            <span className="font-semibold">Message:</span> Patient {emergency.patientId?.name || 'Unknown'} has triggered an emergency. Please check their status immediately.
-                          </p>
+                          {emergency.location && (
+                            <p className="text-sm text-gray-600 mb-1">
+                              <span className="font-semibold">Location:</span> {emergency.location}
+                            </p>
+                          )}
+                          {(emergency.latitude && emergency.longitude) && (
+                            <p className="text-sm text-gray-600 mb-1">
+                              <span className="font-semibold">Coordinates:</span> {emergency.latitude.toFixed(6)}, {emergency.longitude.toFixed(6)}
+                            </p>
+                          )}
+                          <div className="mt-3 p-2 bg-white rounded border border-red-200">
+                            <p className="text-sm text-gray-700">
+                              <span className="font-semibold">Message:</span> {
+                                isPatientManual
+                                  ? `Patient ${emergency.patientId?.name || 'Unknown'} has pressed the emergency button. Immediate attention required!`
+                                  : `Patient ${emergency.patientId?.name || 'Unknown'} has critical health indicators detected by AI. Please check their status immediately.`
+                              }
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
@@ -466,40 +507,69 @@ const CaregiverDashboard = () => {
             {prediction && (
               <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
                 <h2 className="text-3xl font-bold text-gray-800 mb-4">
-                  Predictive Health Insight - {selectedPatient.name}
+                  Predictive Health Insight (AI Analysis) - {selectedPatient.name}
                 </h2>
-                <div className="flex items-center gap-3 mb-2">
-                  <span className="font-semibold">Risk Level:</span>
+                
+                {/* AI Status Badge with Color Coding */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-semibold text-lg">AI Status:</span>
                   <span
-                    className={`px-3 py-1 rounded-full text-lg font-bold ${
-                      prediction.riskLevel?.toLowerCase() === 'critical'
-                        ? 'bg-red-100 text-red-700'
-                        : prediction.riskLevel?.toLowerCase() === 'high'
-                        ? 'bg-orange-100 text-orange-700'
-                        : prediction.riskLevel?.toLowerCase() === 'moderate'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-green-100 text-green-700'
+                    className={`px-4 py-2 rounded-full text-lg font-bold ${
+                      (prediction.status || prediction.riskLevel)?.toUpperCase() === 'CRITICAL'
+                        ? 'bg-red-500 text-white shadow-lg'
+                        : (prediction.status || prediction.riskLevel)?.toUpperCase() === 'WARNING'
+                        ? 'bg-yellow-400 text-yellow-900 shadow-lg'
+                        : 'bg-green-500 text-white shadow-lg'
                     }`}
                   >
-                    {prediction.riskLevel || 'Unknown'}
+                    {(prediction.status || prediction.riskLevel) || 'NORMAL'}
                   </span>
                 </div>
-                {prediction.possibleFutureDiseases?.length > 0 && (
-                  <div className="mb-2">
-                    <p className="font-semibold text-gray-800">Possible Future Issues:</p>
-                    <ul className="list-disc list-inside text-gray-700">
-                      {prediction.possibleFutureDiseases.map((d, idx) => (
-                        <li key={idx}>{d}</li>
+
+                {/* Risk Level */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-semibold text-lg">Risk Level:</span>
+                  <span
+                    className={`px-4 py-2 rounded-full text-lg font-bold ${
+                      prediction.riskLevel?.toLowerCase() === 'critical'
+                        ? 'bg-red-100 text-red-700 border-2 border-red-500'
+                        : prediction.riskLevel?.toLowerCase() === 'high' || prediction.riskLevel?.toLowerCase() === 'warning'
+                        ? 'bg-orange-100 text-orange-700 border-2 border-orange-500'
+                        : prediction.riskLevel?.toLowerCase() === 'moderate'
+                        ? 'bg-yellow-100 text-yellow-700 border-2 border-yellow-500'
+                        : 'bg-green-100 text-green-700 border-2 border-green-500'
+                    }`}
+                  >
+                    {prediction.riskLevel || 'Normal'}
+                  </span>
+                </div>
+
+                {/* Future Issues */}
+                {(prediction.futureIssues?.length > 0 || prediction.possibleFutureDiseases?.length > 0) && (
+                  <div className="bg-gray-50 p-3 rounded-lg border border-gray-300 mb-3">
+                    <p className="font-semibold text-gray-800 mb-2">Possible Future Health Issues:</p>
+                    <ul className="list-disc list-inside text-gray-700 space-y-1">
+                      {(prediction.futureIssues || prediction.possibleFutureDiseases || []).map((d, idx) => (
+                        <li key={idx} className="text-base">{d}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                <p className="text-lg text-gray-700">
-                  <span className="font-semibold">Confidence:</span> {(prediction.confidenceScore * 100 || 0).toFixed(0)}%
-                </p>
-                <p className="text-lg text-gray-700">
-                  {prediction.explanation || prediction.message}
-                </p>
+
+                {/* Confidence Score */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-semibold text-lg">AI Confidence:</span>
+                  <span className="text-lg text-gray-700">
+                    {prediction.confidence || (prediction.confidenceScore ? Math.round(prediction.confidenceScore * 100) : 0)}%
+                  </span>
+                </div>
+
+                {/* Explanation */}
+                {prediction.explanation && (
+                  <p className="text-base text-gray-700 mt-2 italic">
+                    {prediction.explanation}
+                  </p>
+                )}
               </div>
             )}
 

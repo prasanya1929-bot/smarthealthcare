@@ -103,6 +103,10 @@ export const updateEmergency = (id, data) => {
   return api.put(`/emergencies/${id}`, data);
 };
 
+export const acknowledgeEmergency = (id, userId) => {
+  return api.post(`/emergencies/${id}/acknowledge`, { userId });
+};
+
 // Sensor Data API
 export const sendSensorData = (data) => {
   return api.post('/sensor-data', data);

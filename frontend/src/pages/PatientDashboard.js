@@ -154,17 +154,35 @@ const PatientDashboard = () => {
   };
 
   const handleEmergency = async () => {
-    if (window.confirm('Are you sure you want to trigger an emergency? This will call the ambulance.')) {
+    if (window.confirm('Are you sure you want to trigger an emergency? Caregivers and doctors will be notified immediately.')) {
       try {
+        // Get current location if available
+        let location = formData.location || '';
+        let latitude = null;
+        let longitude = null;
+
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              latitude = position.coords.latitude;
+              longitude = position.coords.longitude;
+            },
+            () => {
+              console.log('Location access denied or unavailable');
+            }
+          );
+        }
+
+        // Create emergency with PATIENT_MANUAL type for instant notification
         await createEmergency({
           patientId: user._id,
-          location: formData.location || ''
+          location: location,
+          latitude: latitude,
+          longitude: longitude,
+          emergencyType: 'PATIENT_MANUAL' // This triggers instant notification
         });
         
-        // Call ambulance
-        window.location.href = 'tel:108';
-        
-        alert('Emergency triggered! Ambulance has been called.');
+        alert('🚨 Emergency triggered! Caregivers and doctors have been notified immediately.');
       } catch (error) {
         alert('Error triggering emergency: ' + (error.response?.data?.message || error.message));
       }
@@ -400,40 +418,69 @@ const PatientDashboard = () => {
               </span>
             </div>
             {prediction && (
-              <div className="mt-6 space-y-2">
-                <h3 className="text-2xl font-bold text-gray-800 mb-2">Predictive Health Insight</h3>
-                <div className="flex items-center gap-3">
-                  <span className="font-semibold">Risk Level:</span>
+              <div className="mt-6 space-y-3 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border-2 border-indigo-200">
+                <h3 className="text-2xl font-bold text-gray-800 mb-2">Predictive Health Insight (AI Analysis)</h3>
+                
+                {/* Status Badge with Color Coding */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-semibold text-lg">AI Status:</span>
                   <span
-                    className={`px-3 py-1 rounded-full text-lg font-bold ${
-                      prediction.riskLevel?.toLowerCase() === 'critical'
-                        ? 'bg-red-100 text-red-700'
-                        : prediction.riskLevel?.toLowerCase() === 'high'
-                        ? 'bg-orange-100 text-orange-700'
-                        : prediction.riskLevel?.toLowerCase() === 'moderate'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-green-100 text-green-700'
+                    className={`px-4 py-2 rounded-full text-lg font-bold ${
+                      (prediction.status || prediction.riskLevel)?.toUpperCase() === 'CRITICAL'
+                        ? 'bg-red-500 text-white shadow-lg'
+                        : (prediction.status || prediction.riskLevel)?.toUpperCase() === 'WARNING'
+                        ? 'bg-yellow-400 text-yellow-900 shadow-lg'
+                        : 'bg-green-500 text-white shadow-lg'
                     }`}
                   >
-                    {prediction.riskLevel || 'Unknown'}
+                    {(prediction.status || prediction.riskLevel) || 'NORMAL'}
                   </span>
                 </div>
-                {prediction.possibleFutureDiseases?.length > 0 && (
-                  <div>
-                    <p className="font-semibold text-gray-800">Possible Future Issues:</p>
-                    <ul className="list-disc list-inside text-gray-700">
-                      {prediction.possibleFutureDiseases.map((d, idx) => (
-                        <li key={idx}>{d}</li>
+
+                {/* Risk Level */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-semibold text-lg">Risk Level:</span>
+                  <span
+                    className={`px-4 py-2 rounded-full text-lg font-bold ${
+                      prediction.riskLevel?.toLowerCase() === 'critical'
+                        ? 'bg-red-100 text-red-700 border-2 border-red-500'
+                        : prediction.riskLevel?.toLowerCase() === 'high' || prediction.riskLevel?.toLowerCase() === 'warning'
+                        ? 'bg-orange-100 text-orange-700 border-2 border-orange-500'
+                        : prediction.riskLevel?.toLowerCase() === 'moderate'
+                        ? 'bg-yellow-100 text-yellow-700 border-2 border-yellow-500'
+                        : 'bg-green-100 text-green-700 border-2 border-green-500'
+                    }`}
+                  >
+                    {prediction.riskLevel || 'Normal'}
+                  </span>
+                </div>
+
+                {/* Future Issues */}
+                {(prediction.futureIssues?.length > 0 || prediction.possibleFutureDiseases?.length > 0) && (
+                  <div className="bg-white p-3 rounded-lg border border-gray-300">
+                    <p className="font-semibold text-gray-800 mb-2">Possible Future Health Issues:</p>
+                    <ul className="list-disc list-inside text-gray-700 space-y-1">
+                      {(prediction.futureIssues || prediction.possibleFutureDiseases || []).map((d, idx) => (
+                        <li key={idx} className="text-base">{d}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                <p className="text-lg text-gray-700">
-                  <span className="font-semibold">Confidence:</span> {(prediction.confidenceScore * 100 || 0).toFixed(0)}%
-                </p>
-                <p className="text-lg text-gray-700">
-                  {prediction.explanation || prediction.message}
-                </p>
+
+                {/* Confidence Score */}
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-lg">AI Confidence:</span>
+                  <span className="text-lg text-gray-700">
+                    {prediction.confidence || (prediction.confidenceScore ? Math.round(prediction.confidenceScore * 100) : 0)}%
+                  </span>
+                </div>
+
+                {/* Explanation */}
+                {prediction.explanation && (
+                  <p className="text-base text-gray-700 mt-2 italic">
+                    {prediction.explanation}
+                  </p>
+                )}
               </div>
             )}
           </div>

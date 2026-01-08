@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const PatientHealth = require('../models/PatientHealth');
 const Emergency = require('../models/Emergency');
+const { getAIAnalysis } = require('../services/aiHealthAnalysis');
+const { sendEmergencyNotification, shouldSendNotification } = require('../services/notificationService');
 
 // Get health data for a patient
 router.get('/patient/:patientId', async (req, res) => {
@@ -118,43 +120,69 @@ router.get('/predict/:patientId', async (req, res) => {
     if (avgChol !== null && avgChol >= 240) possibleFutureDiseases.push('Hypercholesterolemia');
     if (avgHeartRate !== null && avgHeartRate > 110) possibleFutureDiseases.push('Arrhythmia');
 
-    // Calculate confidence based on data quality and quantity
-    // More data points = higher confidence, but also consider data completeness
-    const dataPoints = history.length;
-    const hasCompleteData = recent.some(h => h.systolicBP !== null || h.sugar !== null || h.cholesterol !== null);
-    const baseConfidence = Math.min(0.95, dataPoints / 30);
-    const completenessBonus = hasCompleteData ? 0.05 : 0;
-    const confidenceScore = Math.min(0.99, baseConfidence + completenessBonus);
+    // Get AI analysis for dynamic disease prediction
+    const aiAnalysis = getAIAnalysis(
+      {
+        heartRate: avgHeartRate,
+        spo2: avgSpO2,
+        temperature: avgTemp,
+        systolicBP: avgSystolic,
+        diastolicBP: avgDiastolic,
+        sugar: avgSugar,
+        cholesterol: avgChol
+      },
+      { criticalCount, warningCount }
+    );
 
-    // Auto emergency trigger for High/Critical
-    if (['High', 'Critical'].includes(risk.level)) {
-      const activeEmergency = await Emergency.findOne({ patientId, status: 'active' });
+    // Auto-emergency trigger for Critical AI status (smart notification control)
+    if (aiAnalysis.status === 'CRITICAL' || risk.level === 'Critical') {
+      let activeEmergency = await Emergency.findOne({ 
+        patientId, 
+        status: 'active',
+        emergencyType: 'AI_TRIGGERED'
+      });
+
       if (!activeEmergency) {
-        const emergency = new Emergency({
+        // Create new emergency
+        activeEmergency = new Emergency({
           patientId,
           status: 'active',
-          location: ''
+          location: '',
+          emergencyType: 'AI_TRIGGERED',
+          alertSent: false,
+          acknowledged: false
         });
-        await emergency.save();
+        await activeEmergency.save();
+      }
 
-        // Mock notifications (extensible to Twilio)
-        try {
-          const caregivers = await require('../models/User').find({ role: 'caregiver', linkedPatientId: patientId });
-          const doctors = await require('../models/User').find({ role: 'doctor' });
-          console.log('Emergency alert (mock SMS):');
-          console.log('Patient:', patientId);
-          console.log('Notifying caregivers:', caregivers.map(c => c.phone));
-          console.log('Notifying doctors:', doctors.map(d => d.phone));
-        } catch (notifyErr) {
-          console.error('Notification mock error:', notifyErr.message);
+      // Smart notification: Only send if conditions are met
+      if (shouldSendNotification(activeEmergency)) {
+        const notificationResult = await sendEmergencyNotification(
+          activeEmergency,
+          patientId,
+          'AI_TRIGGERED'
+        );
+
+        if (notificationResult.success) {
+          // Update emergency with notification status
+          activeEmergency.alertSent = true;
+          activeEmergency.lastNotificationSent = new Date();
+          activeEmergency.notificationRetries = (activeEmergency.notificationRetries || 0) + 1;
+          await activeEmergency.save();
         }
       }
     }
 
+    // Combine AI analysis with existing prediction
     res.json({
-      riskLevel: risk.level,
-      possibleFutureDiseases,
-      confidenceScore: Math.round(confidenceScore * 100) / 100,
+      // AI Analysis (primary)
+      status: aiAnalysis.status,
+      riskLevel: aiAnalysis.riskLevel,
+      futureIssues: aiAnalysis.futureIssues.length > 0 ? aiAnalysis.futureIssues : possibleFutureDiseases,
+      confidence: aiAnalysis.confidence,
+      // Legacy fields for backward compatibility
+      possibleFutureDiseases: aiAnalysis.futureIssues.length > 0 ? aiAnalysis.futureIssues : possibleFutureDiseases,
+      confidenceScore: aiAnalysis.confidence / 100, // Convert 0-100 to 0-1 for compatibility
       explanation: risk.message,
       summary: {
         total: history.length,
