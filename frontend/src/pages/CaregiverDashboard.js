@@ -51,6 +51,38 @@ const CaregiverDashboard = () => {
   });
   const [doctors, setDoctors] = useState([]);
   const [prediction, setPrediction] = useState(null);
+  const [previousEmergencyCount, setPreviousEmergencyCount] = useState(0);
+
+  // Register service worker and request notification permission on component mount
+  useEffect(() => {
+    // Register service worker for background notifications (works even when app is closed)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js')
+        .then((registration) => {
+          console.log('Service Worker registered successfully:', registration.scope);
+        })
+        .catch((error) => {
+          console.error('Service Worker registration failed:', error);
+        });
+    }
+
+    // Request notification permission
+    if ('Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            console.log('Notification permission granted for emergency alerts');
+          } else {
+            console.log('Notification permission denied');
+          }
+        });
+      } else if (Notification.permission === 'granted') {
+        console.log('Notification permission already granted');
+      }
+    } else {
+      console.warn('This browser does not support notifications');
+    }
+  }, []);
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('user'));
@@ -92,6 +124,51 @@ const CaregiverDashboard = () => {
       const filtered = emergenciesRes.data.filter(
         (e) => e.patientId && e.patientId._id === patientId
       );
+      
+      // Check for new emergencies and trigger notifications
+      if (filtered.length > previousEmergencyCount && Notification.permission === 'granted') {
+        const newEmergencies = filtered.slice(0, filtered.length - previousEmergencyCount);
+        newEmergencies.forEach(emergency => {
+          const patientName = emergency.patientId?.name || 'Unknown Patient';
+          
+          // Try to use service worker for background notifications first
+          if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'EMERGENCY_ALERT',
+              patientName: patientName,
+              emergencyId: emergency._id,
+              timestamp: emergency.timestamp
+            });
+          }
+          
+          // Fallback to regular notification if service worker is not available
+          try {
+            const notification = new Notification('🚨 Emergency Alert', {
+              body: `${patientName} has triggered an emergency! Please check the dashboard immediately.`,
+              icon: '/favicon.ico',
+              badge: '/favicon.ico',
+              tag: `emergency-${emergency._id}`,
+              requireInteraction: true,
+              vibrate: [200, 100, 200, 100, 200],
+              timestamp: new Date(emergency.timestamp).getTime(),
+              data: {
+                emergencyId: emergency._id,
+                patientId: patientId
+              }
+            });
+            
+            // Handle notification click to focus window
+            notification.onclick = () => {
+              window.focus();
+              notification.close();
+            };
+          } catch (error) {
+            console.error('Error showing notification:', error);
+          }
+        });
+      }
+      
+      setPreviousEmergencyCount(filtered.length);
       setEmergencies(filtered);
     } catch (error) {
       console.error('Error loading emergencies:', error);
@@ -123,11 +200,24 @@ const CaregiverDashboard = () => {
     loadPatientHealthData(patient._id);
   };
 
-  const handleCall = (phone) => {
-    if (phone) {
-      window.location.href = `tel:${phone}`;
+  // Request notification permission on component mount
+  useEffect(() => {
+    if ('Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            console.log('Notification permission granted for emergency alerts');
+          } else {
+            console.log('Notification permission denied');
+          }
+        });
+      } else if (Notification.permission === 'granted') {
+        console.log('Notification permission already granted');
+      }
+    } else {
+      console.warn('This browser does not support notifications');
     }
-  };
+  }, []);
 
   const loadReports = async (patientId, userId, role) => {
     try {
@@ -316,24 +406,16 @@ const CaregiverDashboard = () => {
                   >
                     <p className="text-xl font-semibold">{patient.name}</p>
                     <p className="text-gray-600">{patient.email}</p>
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCall(patient.phone);
-                        }}
-                        className="bg-blue-600 hover:bg-blue-700 text-white text-lg font-semibold px-4 py-2 rounded-lg"
-                      >
-                        📞 Call Patient
-                      </button>
-                    </div>
+                    {patient.phone && (
+                      <p className="text-gray-500 text-sm mt-1">Phone: {patient.phone}</p>
+                    )}
                   </div>
                 ))
               )}
             </div>
           </div>
 
-          {/* Emergency Alerts */}
+          {/* Emergency Alerts - Messages Only */}
           <div className="bg-white rounded-xl shadow-lg p-6">
             <h2 className="text-3xl font-bold text-red-600 mb-4">Emergency Alerts</h2>
             <div className="space-y-3 max-h-96 overflow-y-auto">
@@ -341,28 +423,35 @@ const CaregiverDashboard = () => {
                 <p className="text-lg text-gray-500">No active emergencies</p>
               ) : (
                 emergencies.map((emergency) => (
-                  <div key={emergency._id} className="p-4 border-2 border-red-300 bg-red-50 rounded-lg">
-                    <p className="text-xl font-semibold text-red-800">
-                      🚨 {emergency.patientId?.name || 'Unknown Patient'}
-                    </p>
-                    <p className="text-gray-600">
-                      {emergency.patientId?.phone || 'N/A'}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      {new Date(emergency.timestamp).toLocaleString()}
-                    </p>
-                    {emergency.location && (
-                      <p className="text-sm text-gray-600 mt-1">
-                        Location: {emergency.location}
-                      </p>
-                    )}
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => handleCall(emergency.patientId?.phone)}
-                        className="bg-red-600 hover:bg-red-700 text-white text-lg font-semibold px-4 py-2 rounded-lg"
-                      >
-                        📞 Call Patient
-                      </button>
+                  <div key={emergency._id} className="p-4 border-2 border-red-300 bg-red-50 rounded-lg animate-pulse">
+                    <div className="flex items-start gap-3">
+                      <span className="text-3xl">🚨</span>
+                      <div className="flex-1">
+                        <p className="text-xl font-semibold text-red-800 mb-1">
+                          Emergency Alert
+                        </p>
+                        <p className="text-lg font-medium text-gray-800 mb-2">
+                          Patient: {emergency.patientId?.name || 'Unknown Patient'}
+                        </p>
+                        <p className="text-sm text-gray-600 mb-1">
+                          <span className="font-semibold">Time:</span> {new Date(emergency.timestamp).toLocaleString()}
+                        </p>
+                        {emergency.location && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            <span className="font-semibold">Location:</span> {emergency.location}
+                          </p>
+                        )}
+                        {(emergency.latitude && emergency.longitude) && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            <span className="font-semibold">Coordinates:</span> {emergency.latitude.toFixed(6)}, {emergency.longitude.toFixed(6)}
+                          </p>
+                        )}
+                        <div className="mt-3 p-2 bg-white rounded border border-red-200">
+                          <p className="text-sm text-gray-700">
+                            <span className="font-semibold">Message:</span> Patient {emergency.patientId?.name || 'Unknown'} has triggered an emergency. Please check their status immediately.
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -467,20 +556,23 @@ const CaregiverDashboard = () => {
                   {reports.length === 0 ? (
                     <p className="text-lg text-gray-500">No reports uploaded yet.</p>
                   ) : (
-                    reports.map((r) => (
-                      <a
-                        key={r._id}
-                        href={r.filePath}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block p-3 border border-gray-200 rounded-lg hover:bg-gray-50 text-left"
-                      >
-                        <p className="text-lg font-semibold">{r.title || r.originalName}</p>
-                        <p className="text-sm text-gray-500">
-                          {new Date(r.uploadedAt).toLocaleString()}
-                        </p>
-                      </a>
-                    ))
+                    reports.map((r) => {
+                      const fileUrl = r.filePath.startsWith('http') 
+                        ? r.filePath 
+                        : `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}${r.filePath}`;
+                      return (
+                        <div
+                          key={r._id}
+                          onClick={() => window.open(fileUrl, '_blank')}
+                          className="block p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer text-left"
+                        >
+                          <p className="text-lg font-semibold">{r.title || r.originalName}</p>
+                          <p className="text-sm text-gray-500">
+                            {new Date(r.uploadedAt).toLocaleString()}
+                          </p>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>

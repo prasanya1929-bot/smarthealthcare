@@ -12,10 +12,9 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Static files for uploaded reports
+// Static files for uploaded reports - MUST be before API routes to avoid auth middleware
+// Serve uploads directory publicly without authentication
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
-// Ensure public access from project root as well (addresses report preview issues)
-app.use('/uploads', express.static('uploads'));
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/smarthealthcare';

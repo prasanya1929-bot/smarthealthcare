@@ -118,7 +118,13 @@ router.get('/predict/:patientId', async (req, res) => {
     if (avgChol !== null && avgChol >= 240) possibleFutureDiseases.push('Hypercholesterolemia');
     if (avgHeartRate !== null && avgHeartRate > 110) possibleFutureDiseases.push('Arrhythmia');
 
-    const confidenceScore = Math.min(1, history.length / 30);
+    // Calculate confidence based on data quality and quantity
+    // More data points = higher confidence, but also consider data completeness
+    const dataPoints = history.length;
+    const hasCompleteData = recent.some(h => h.systolicBP !== null || h.sugar !== null || h.cholesterol !== null);
+    const baseConfidence = Math.min(0.95, dataPoints / 30);
+    const completenessBonus = hasCompleteData ? 0.05 : 0;
+    const confidenceScore = Math.min(0.99, baseConfidence + completenessBonus);
 
     // Auto emergency trigger for High/Critical
     if (['High', 'Critical'].includes(risk.level)) {
@@ -174,12 +180,15 @@ router.get('/predict/:patientId', async (req, res) => {
 // Helpers
 function average(arr) {
   if (!arr || !arr.length) return null;
-  const sum = arr.reduce((s, v) => s + v, 0);
-  return sum / arr.length;
+  // Filter out null, undefined, and NaN values
+  const validValues = arr.filter(v => v !== null && v !== undefined && !isNaN(v) && typeof v === 'number');
+  if (!validValues.length) return null;
+  const sum = validValues.reduce((s, v) => s + Number(v), 0);
+  return sum / validValues.length;
 }
 
 function isFiniteValue(v) {
-  return typeof v === 'number' && !Number.isNaN(v);
+  return v !== null && v !== undefined && typeof v === 'number' && !Number.isNaN(v) && isFinite(v);
 }
 
 function determineStatus({ heartRate, spo2, temperature, systolicBP, diastolicBP, sugar, cholesterol }) {
@@ -232,39 +241,46 @@ function evaluateRisk(metrics) {
   let level = 'Low';
   let message = 'Vitals are generally stable. Continue regular monitoring.';
 
-  const criticalConditions = [
-    avgHeartRate !== null && (avgHeartRate < 50 || avgHeartRate > 110),
-    avgSpO2 !== null && avgSpO2 < 90,
-    avgTemp !== null && (avgTemp < 35 || avgTemp > 38.4),
-    avgSystolic !== null && avgSystolic >= 160,
-    avgDiastolic !== null && avgDiastolic >= 100,
-    avgSugar !== null && avgSugar >= 200,
-    avgChol !== null && avgChol >= 240,
-    criticalCount >= 3
-  ];
+  // Count actual critical conditions (only check if value exists and is truly critical)
+  let criticalConditionCount = 0;
+  if (avgHeartRate !== null && !isNaN(avgHeartRate) && (avgHeartRate < 50 || avgHeartRate > 110)) criticalConditionCount++;
+  if (avgSpO2 !== null && !isNaN(avgSpO2) && avgSpO2 < 90) criticalConditionCount++;
+  if (avgTemp !== null && !isNaN(avgTemp) && (avgTemp < 35 || avgTemp > 38.4)) criticalConditionCount++;
+  if (avgSystolic !== null && !isNaN(avgSystolic) && avgSystolic >= 160) criticalConditionCount++;
+  if (avgDiastolic !== null && !isNaN(avgDiastolic) && avgDiastolic >= 100) criticalConditionCount++;
+  if (avgSugar !== null && !isNaN(avgSugar) && avgSugar >= 200) criticalConditionCount++;
+  if (avgChol !== null && !isNaN(avgChol) && avgChol >= 240) criticalConditionCount++;
 
-  const warningConditions = [
-    avgHeartRate !== null && ((avgHeartRate >= 50 && avgHeartRate < 60) || (avgHeartRate > 100 && avgHeartRate <= 110)),
-    avgSpO2 !== null && avgSpO2 >= 90 && avgSpO2 < 95,
-    avgTemp !== null && ((avgTemp >= 35 && avgTemp < 36) || (avgTemp > 37.5 && avgTemp <= 38.4)),
-    avgSystolic !== null && avgSystolic >= 140 && avgSystolic < 160,
-    avgDiastolic !== null && avgDiastolic >= 90 && avgDiastolic < 100,
-    avgSugar !== null && avgSugar >= 140 && avgSugar < 200,
-    avgChol !== null && avgChol >= 200 && avgChol < 240
-  ];
+  // Count warning conditions
+  let warningConditionCount = 0;
+  if (avgHeartRate !== null && !isNaN(avgHeartRate) && ((avgHeartRate >= 50 && avgHeartRate < 60) || (avgHeartRate > 100 && avgHeartRate <= 110))) warningConditionCount++;
+  if (avgSpO2 !== null && !isNaN(avgSpO2) && avgSpO2 >= 90 && avgSpO2 < 95) warningConditionCount++;
+  if (avgTemp !== null && !isNaN(avgTemp) && ((avgTemp >= 35 && avgTemp < 36) || (avgTemp > 37.5 && avgTemp <= 38.4))) warningConditionCount++;
+  if (avgSystolic !== null && !isNaN(avgSystolic) && avgSystolic >= 140 && avgSystolic < 160) warningConditionCount++;
+  if (avgDiastolic !== null && !isNaN(avgDiastolic) && avgDiastolic >= 90 && avgDiastolic < 100) warningConditionCount++;
+  if (avgSugar !== null && !isNaN(avgSugar) && avgSugar >= 140 && avgSugar < 200) warningConditionCount++;
+  if (avgChol !== null && !isNaN(avgChol) && avgChol >= 200 && avgChol < 240) warningConditionCount++;
 
-  if (criticalConditions.some(Boolean)) {
+  // Determine risk level based on actual conditions and history
+  // Critical: Multiple critical conditions OR 3+ critical readings in history
+  if (criticalConditionCount >= 2 || criticalCount >= 3) {
     level = 'Critical';
-    message = 'CRITICAL: Abnormal vital signs detected. Immediate medical attention recommended.';
-  } else if (warningConditions.some(Boolean) || (warningCount >= 5 || (warningCount + criticalCount) > normalCount)) {
+    message = 'CRITICAL: Multiple abnormal vital signs detected. Immediate medical attention recommended.';
+  } 
+  // High: One critical condition OR multiple warnings OR significant warning history
+  else if (criticalConditionCount >= 1 || warningConditionCount >= 3 || warningCount >= 5 || (warningCount + criticalCount) > normalCount) {
     level = 'High';
     message = 'HIGH: Some abnormal trends detected. Monitor closely and consult a doctor if symptoms persist.';
-  } else if (warningCount >= 2) {
+  } 
+  // Moderate: Some warning conditions or moderate warning history
+  else if (warningConditionCount >= 1 || warningCount >= 2) {
     level = 'Moderate';
     message = 'MODERATE: Minor fluctuations detected. Continue monitoring.';
-  } else {
+  } 
+  // Low: All vitals normal
+  else {
     level = 'Low';
-    message = 'LOW: Vitals are within acceptable ranges.';
+    message = 'LOW: Vitals are within acceptable ranges. Continue regular monitoring.';
   }
 
   return { level, message };

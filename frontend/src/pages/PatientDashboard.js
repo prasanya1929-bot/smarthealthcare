@@ -481,20 +481,23 @@ const PatientDashboard = () => {
               {reports.length === 0 ? (
                 <p className="text-lg text-gray-500">No reports uploaded yet.</p>
               ) : (
-                reports.map((r) => (
-                  <a
-                    key={r._id}
-                    href={r.filePath}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block p-3 border border-gray-200 rounded-lg hover:bg-gray-50 text-left"
-                  >
-                    <p className="text-lg font-semibold">{r.title || r.originalName}</p>
-                    <p className="text-sm text-gray-500">
-                      {new Date(r.uploadedAt).toLocaleString()}
-                    </p>
-                  </a>
-                ))
+                reports.map((r) => {
+                  const fileUrl = r.filePath.startsWith('http') 
+                    ? r.filePath 
+                    : `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}${r.filePath}`;
+                  return (
+                    <div
+                      key={r._id}
+                      onClick={() => window.open(fileUrl, '_blank')}
+                      className="block p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer text-left"
+                    >
+                      <p className="text-lg font-semibold">{r.title || r.originalName}</p>
+                      <p className="text-sm text-gray-500">
+                        {new Date(r.uploadedAt).toLocaleString()}
+                      </p>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
